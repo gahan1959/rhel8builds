@@ -1,0 +1,72 @@
+{
+   "Application Technical Contact" : "Paul Schmidt,Bill Mesik,Richard Davis ",
+   "Application Support Team Email" : "HCSC_Unix@bcbbsil.com",
+   "Application Name" : "Linux Infrastructure Management",
+   "LBOM Number" : "20213598",
+   "Application Owner" : "Paul Schmidt",
+   "Project Manager" : "Javier Gomez",
+   "Project Number" : "P00025443",
+   "Application ID Number" : "APP00000000",
+   "Portfolio" : "IT: Infrastructure",
+   "Application Development Team Members" : "Paul Schmidt,Bill Mesik,Richard Davis",
+   "Application Support Team Name" : "HCSC_Unix"
+}
+{
+   "awauslmgt01" : {
+      "ip" : "10.137.52.39",
+      "gateway" : "10.137.52.1",
+      "env" : "altprod",
+      "vlan" : "2856",
+      "virtual" : "virtual",
+      "fqdn" : "awauslmgt01.app.alt.hcscint.net",
+      "memory" : "32",
+      "loc" : "wau",
+      "netmask" : "255.255.252.0",
+      "cpus" : "4",
+      "osver" : "7.9",
+      "subnet" : "10.137.52.0"
+   },
+   "twauslmgt01" : {
+      "ip" : "10.134.129.199",
+      "gateway" : "10.134.128.1",
+      "env" : "test",
+      "vlan" : "1720",
+      "virtual" : "virtual",
+      "fqdn" : "twauslmgt01.app.test.hcscint.net",
+      "memory" : "32",
+      "loc" : "wau",
+      "netmask" : "255.255.252.0",
+      "cpus" : "4",
+      "osver" : "7.9",
+      "subnet" : "10.134.128.0"
+   },
+   "dwauslmgt01" : {
+      "ip" : "10.130.3.119",
+      "gateway" : "10.130.0.1",
+      "env" : "dev",
+      "vlan" : "2401",
+      "virtual" : "virtual",
+      "fqdn" : "dwauslmgt01.app.dev.hcscint.net",
+      "memory" : "32",
+      "loc" : "wau",
+      "netmask" : "255.255.252.0",
+      "cpus" : "4",
+      "osver" : "7.9",
+      "subnet" : "10.130.0.0"
+   },
+   "pwauslmgt01" : {
+      "ip" : "10.136.137.123",
+      "gateway" : "10.136.136.1",
+      "env" : "prod",
+      "vlan" : "2722",
+      "virtual" : "virtual",
+      "fqdn" : "pwauslmgt01.app.hcscint.net",
+      "memory" : "32",
+      "loc" : "wau",
+      "netmask" : "255.255.252.0",
+      "cpus" : "4",
+      "osver" : "7.9",
+      "subnet" : "10.136.136.0"
+   }
+}
+

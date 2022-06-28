@@ -1,0 +1,1113 @@
+#!/usr/bin/perl
+#
+#  parselbom.pl - Generate json file for input to sat6 build process from lbom
+#
+#  Author : Paul R. Schmidt 20210923
+#  Version: $Id: parselbom.pl,v 1.3 2021/09/23 21:27:42 i340264 Exp $
+#  Date   : $Date: 2021/09/23 21:27:42 $
+#
+#  Copyright HCSC, All rights reserved
+#
+use strict ;
+use warnings ;
+
+use Spreadsheet::ParseXLSX ;
+use Data::Dumper ;
+use Getopt::Long ;
+use JSON ;
+
+my $LBOMFILE	= q{} ;
+my $VERSION		= sprintf("%d.%d", q$Revision: 1.3 $ =~ /: (\d+)\.(\d+)/) ;
+
+my $cell		= q{} ;
+my $col			= 0 ;
+my $debug 		= q{} ;
+my $dptr		= q{} ;
+my $hostname	= q{} ;
+my $key			= 0 ;
+my $maxcol		= 0 ;
+my $maxrow		= 0 ;
+my $myname		= $0 ;  #  For Usage's use
+my $row			= 0 ;
+my $rowname		= 0 ;
+my $rowval		= 0 ;
+my $rval		= 0 ;
+my $sheet		= q{} ;
+my $skip		= q{} ;
+my $tab			= q{} ;
+my $workbook	= q{} ;
+
+#  Holds the Project Details and the header locations for the
+#  Distributed Assets and IP tabs
+my %data = (
+	q{Project Details}		=> {
+		q{Application Name}							=> q{},
+		q{Application ID Number}					=> q{},
+		q{Project Number}							=> q{},
+		q{Portfolio}								=> q{},
+		q{Project Manager}							=> q{},
+		q{Application Owner}						=> q{},
+		q{Application Technical Contact}			=> q{},
+		q{Application Development Team Members}		=> q{},
+		q{Application Support Team Name}			=> q{},
+		q{Application Support Team Email}			=> q{},
+		q{LBOM Number}								=> q{}
+	},
+	q{Distributed Assets}	=> {
+		q{headers}	=> {
+			q{hdrrow}	=> 0,
+			q{hdrtag}	=> q{Asset No.},
+			q{env}		=> {
+				q{name}	=> q{Application Environment},
+				q{col}	=>   0
+			},
+			q{new}		=> {
+				q{name}	=> q{Asset New Existing},
+				q{col}	=>   0
+			},
+			q{platform}	=> {
+				q{name}	=> q{Platform},
+				q{col}	=>   0
+			},
+			q{virtual}	=> {
+				q{name}	=> q{Physical or Virtual},
+				q{col}	=>   0
+			},
+			q{cpus}		=> {
+				q{name}	=> q{CPUs},
+				q{col}	=>   0
+			},
+			q{memory}	=> {
+				q{name}	=> q{RAM GB},
+				q{col}	=>   0
+			},
+			q{loc}	=> {
+				q{name}	=> q{Asset Location},
+				q{col}	=>   0
+			},
+			q{hostname}	=> {
+				q{name}	=> q{Server Name Host Name},
+				q{col}	=>   0
+			},
+			q{osver}	=> {
+				q{name}	=> q{OS Version},
+				q{col}	=>   0
+			}
+		}
+	},
+	q{IP}					=> {
+		q{headers}	=> {
+			q{hdrrow}	=> 0,
+			q{hdrtag}	=> q{IP INSTANCE},
+			q{hostname}	=> {
+				q{name}	=> q{Host Name},
+				q{col}	=>   0
+			},
+			q{os}	=> {
+				q{name}	=> q{OS},
+				q{col}	=>   0
+			},
+			q{env}	=> {
+				q{name}	=> q{Environment},
+				q{col}	=>   0
+			},
+			q{ifdesc}	=> {
+				q{name}	=> q{Interface Description},
+				q{col}	=>   0
+			},
+			q{subnetmask}	=> {
+				q{name}	=> q{Subnet Mask},
+				q{col}	=>   0
+			},
+			q{gateway}	=> {
+				q{name}	=> q{Gateway},
+				q{col}	=>   0
+			},
+			q{fqdn}	=> {
+				q{name}	=> q{DNS A Record},
+				q{col}	=>   0
+			},
+			q{loc}	=> {
+				q{name}	=> q{Site Code},
+				q{col}	=>   0
+			},
+			q{ip}	=> {
+				q{name}	=> q{IP Address},
+				q{col}	=>   0
+			},
+			q{vlan}	=> {
+				q{name}	=> q{VLAN},
+				q{col}	=>   0
+			},
+		}
+	}
+) ;
+
+#  This hash will hold the gathered host information for host elegible
+#  for building
+my %hostinfo = () ;
+
+#  hostinfo = (
+#	'name'	=> {
+#		cpus	=> q{},
+#		fqdn	=> q{},
+#		gateway	=> q{},
+#		ip		=> q{},
+#		memory	=> q{},
+#		netmask	=> q{},
+#		osver	=> q{},
+#		subnet	=> q{},
+#		virtual	=> q{},
+#		vlan	=> q{}
+#	}
+#) ;
+#  from DA tab
+#	*not* DR
+#	*not* azure
+#  	only new
+#  	only linux platform
+#  	physical/virt
+#  	CPUs
+#  	Mem
+#  	hostname
+#  	osver only rhel
+#  from the IP tab:
+#  	hostname
+#  	env
+#  	interface desc
+#  	subnet/mask
+#  	gateway
+#  	Arec/fqdn
+#  	ipaddr
+#  	vlan
+
+my %tabs = () ;
+
+my @cidrmap = (
+	{ 'dec' => '', 'hex' => '' },
+	{ 'dec' => '128.0.0.0', 'hex' => '80000000' },
+	{ 'dec' => '192.0.0.0', 'hex' => 'C0000000' },
+	{ 'dec' => '224.0.0.0', 'hex' => 'E0000000' },
+	{ 'dec' => '240.0.0.0', 'hex' => 'F0000000' },
+	{ 'dec' => '248.0.0.0', 'hex' => 'F8000000' },
+	{ 'dec' => '252.0.0.0', 'hex' => 'FC000000' },
+	{ 'dec' => '254.0.0.0', 'hex' => 'FE000000' },
+	{ 'dec' => '255.0.0.0', 'hex' => 'FF000000' },
+	{ 'dec' => '255.128.0.0', 'hex' => 'FF800000' },
+	{ 'dec' => '255.192.0.0', 'hex' => 'FFC00000' },
+	{ 'dec' => '255.224.0.0', 'hex' => 'FFE00000' },
+	{ 'dec' => '255.240.0.0', 'hex' => 'FFF00000' },
+	{ 'dec' => '255.248.0.0', 'hex' => 'FFF80000' },
+	{ 'dec' => '255.252.0.0', 'hex' => 'FFFC0000' },
+	{ 'dec' => '255.254.0.0', 'hex' => 'FFFE0000' },
+	{ 'dec' => '255.255.0.0', 'hex' => 'FFFF0000' },
+	{ 'dec' => '255.255.128.0', 'hex' => 'FFFF8000' },
+	{ 'dec' => '255.255.192.0', 'hex' => 'FFFFC000' },
+	{ 'dec' => '255.255.224.0', 'hex' => 'FFFFE000' },
+	{ 'dec' => '255.255.240.0', 'hex' => 'FFFFF000' },
+	{ 'dec' => '255.255.248.0', 'hex' => 'FFFFF800' },
+	{ 'dec' => '255.255.252.0', 'hex' => 'FFFFFC00' },
+	{ 'dec' => '255.255.254.0', 'hex' => 'FFFFFE00' },
+	{ 'dec' => '255.255.255.0', 'hex' => 'FFFFFF00' },
+	{ 'dec' => '255.255.255.128', 'hex' => 'FFFFFF80' },
+	{ 'dec' => '255.255.255.192', 'hex' => 'FFFFFFC0' },
+	{ 'dec' => '255.255.255.224', 'hex' => 'FFFFFFE0' },
+	{ 'dec' => '255.255.255.240', 'hex' => 'FFFFFFF0' },
+	{ 'dec' => '255.255.255.248', 'hex' => 'FFFFFFF8' },
+	{ 'dec' => '255.255.255.252', 'hex' => 'FFFFFFFC' },
+	{ 'dec' => '255.255.255.254', 'hex' => 'FFFFFFFE' },
+	{ 'dec' => '255.255.255.255', 'hex' => 'FFFFFFFF' }
+);
+
+#  Process the Distributed Assets tab to determine the validity of
+#  each of the entries and create an entry in the hostlist for those
+#  that are valid
+sub BuildHostInfo {
+
+	my $done	= q{} ;
+	my $rc		= q{} ;
+	my $val		= q{} ;
+
+	# print "Initializing host list\n" ;
+
+	# Grab the Project Details sheet
+	$sheet	= $tabs{q{Distributed Assets}} ;
+
+	$maxcol	= $sheet->{MaxCol} ;
+	$maxrow	= $sheet->{MaxRow} ;
+
+	#  This is just to simplify references later
+	$dptr = $data{q{Distributed Assets}}->{headers} ;
+
+	#  The first data row should be the one immediately following hdrs
+	$row	= $dptr->{hdrrow} + 1 ;
+
+	# print "row before loop is ", $row, "\n" ;
+	for( $row = $dptr->{hdrrow} + 1 ; $row < $maxrow ; $row++) {
+
+		$skip = 0 ;
+
+		# print "New row ", $row, "\n" ;
+
+		$col = 1 ;
+		#  Check the first col value (recall this tab starts in col B)
+		$cell = $sheet->get_cell($row, $col) ;
+
+		#  A null cell indicates we're done
+		unless( $cell ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			$done++ ;
+			last ;
+		}
+
+		$val = $cell->value() ;
+
+		unless( $val ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			$done++ ;
+			last ;
+		}
+
+		#  Validate (check new, platform, env, osver, and env) for this entry
+
+		#  Matching env against DR first because some of the other fields are blank for DR entries and
+		#  that causes premature termination
+		$col = $dptr->{env}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{dr}) ;
+
+		if( $rc == -1 ) {
+			print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		#  This is different from the others since we *don't* want the
+		#  env to match DR
+		if( $rc == 2 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is dr skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 1 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{ terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is *not* DR\n" ;
+
+		$col = $dptr->{loc}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{azure}) ;
+
+		if( $rc == -1 ) {
+			print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		#  This is different from the others since we *don't* want the
+		#  env to match DR
+		if( $rc == 2 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is azure skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 1 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{ terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is *not* azure\n" ;
+
+		$col = $dptr->{new}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{new}) ;
+
+		if( $rc == -1 ) {
+			print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 1 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ isn't new skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 2 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is new\n" ;
+
+		$col = $dptr->{platform}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{linux}) ;
+
+		if( $rc == -1 ) {
+			print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 1 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ isn't linux skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 2 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is linux\n" ;
+
+		$col = $dptr->{osver}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{rhel}) ;
+
+		if( $rc == -1 ) {
+			print q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 1 ) {
+			# print q{ cell in }, $row, q{,}, $col, q{ isn't redhat skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 2 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is redhat\n" ;
+
+		#  This entry is valid for building
+
+		#  Extract Distributed Assets data
+		ExtractDAData() ;
+	}
+
+}
+
+#
+#  Determine the columns for each of the fields we need based on the
+#  column header.  This will protect against them rearranging columns.
+sub ExtractCols {
+
+	my $tabid	= shift ;
+
+	# print q{tabid is }, $tabid, "\n" ;
+	#  Pull out the project data first
+	$sheet	= $tabs{$tabid} ;
+
+	unless( $sheet ) {
+		print STDERR q{Can't extract sheet for }, $tabid, "\n" ;
+		exit 1 ;
+	}
+
+	$maxcol	= $sheet->{MaxCol} ;
+	$maxrow	= $sheet->{MaxRow} ;
+
+	#  This is just to simplify references later
+	$dptr = $data{$tabid} ;
+
+	#  Start at cell A1 for IP tab but B1 for Distributed Assets
+	#  (don't ask me where column A went)
+	$col = ($tabid eq q{IP}) ? 0 : 1 ;
+	$row = 0 ;
+
+	#  First thing we need to do is figure out which row is the headers
+	for($row = 0 ; $row <= $maxrow ; $row++ ) {
+
+		#  Extract this cell from the sheet
+		$cell = $sheet->get_cell($row, $col) ;
+		#  Skip it if it's null
+		next unless( $cell ) ;
+
+		#  Get its value
+		$rowval = $cell->value() ;
+
+		# print q{Checking }, $rowval, q{ against }, $dptr->{headers}{hdrtag}, "\n" ;
+		#  And keep going if it's not the first header
+		next unless( $rowval eq $dptr->{headers}{hdrtag} ) ;
+
+		#  We found the row we want, save and continue with next step
+		# print "Found header row: $rowval\n" ;
+		$dptr->{headers}->{hdrrow} = $row ;
+		last ;
+	}
+
+	#  We've got the header row now look for the headers
+	#  Start in column C since we know col B is the asset number
+	for($col = ($col + 1) ; $col <= $maxcol; $col++) {
+
+		#  Extract this header cell from the sheet
+		$cell = $sheet->get_cell($dptr->{headers}->{hdrrow}, $col) ;
+
+		#  And its value
+		$rowval = $cell->value() ;
+
+		# Skip blank cells
+		next unless( $rowval ) ;
+
+		# print q{rowval is "}, $rowval, q{"}, "\n" ;
+
+		#  Now search for it in the data hash
+		foreach $key ( keys %{$dptr->{headers}}) {
+			next if( $key eq q{hdrrow}  || $key eq q{hdrtag} ) ;
+			$rval = $rowval ;
+
+			#  This bit of cleanup needs to be done because
+			#  two of the header fields on the IP tab have
+			#  imbedded newlines.   One(hostname) has it before
+			#  the string we'll be looking for and the other
+			#  (ip addr) has it after) :/
+			if( $tabid eq q{IP} && $rval =~ m/\n/ ) {
+				if( $key eq q{hostname} ) {
+					#  The hostname header is:
+					#  "Hostnames should be entered on Dist. Assets, Column Q\n  Host Name"
+					($rval) =~ s/^.*\n//g ;
+				}
+				elsif( $key eq q{ip} ) {
+					#  The ip addr header is:
+					#  "IP Address\n(Needs verification if auto-filled)"
+					($rval) =~ s/\n.*$//g ;
+				}
+			}
+
+			#  Normalize the header
+			($rval) =~ s&[-"()+/?]& &g ;
+			($rval) =~ s/^\s+|\s+$//g ;
+			($rval) =~ s/\s+/ /g ;
+
+			#  If this column matches the key we're looking for save
+			#  the col number
+			if( $dptr->{headers}{$key}{name} eq $rval ) {
+				$dptr->{headers}{$key}{col} = $col ;
+				next ;
+			}
+		}
+	}
+}
+
+#
+#  Extract the data from the specified cell and save it in the
+#  hostinfo hash
+sub ExtractDACell {
+	my $field	= shift ;
+	my $erow	= shift ;
+
+	my $val		= q{} ;
+
+	$col = $dptr->{$field}{col} ;
+	$cell = $sheet->get_cell($erow, $col) ;
+
+	#  A null cell indicates we're done which is an error here
+	unless( $cell ) {
+		print STDERR $field, q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	$val = lc($cell->value()) ;
+
+	#  An empty value here is an error
+	unless( $val ) {
+		print $field, q{ cell in }, $row, q{,}, $col, q{ is empty terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	# print $field, q{ is: }, $val, "\n" ;
+
+	$hostinfo{$hostname}{$field} = $val ;
+
+}
+
+#
+#  Extract the data from the specified cell and save it in the
+#  hostinfo hash
+sub ExtractIPCell {
+	my $field	= shift ;
+	my $erow	= shift ;
+
+	my $val		= q{} ;
+
+	$col = $dptr->{$field}{col} ;
+	$cell = $sheet->get_cell($erow, $col) ;
+
+	#  A null cell indicates we're done which is an error here
+	unless( $cell ) {
+		print STDERR $field, q{ cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	$val = lc($cell->value()) ;
+
+	#  An empty value here is an error
+	unless( $val ) {
+		print $field, q{ cell in }, $row, q{,}, $col, q{ is empty terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	# print $field, q{ is: }, $val, "\n" ;
+
+	$hostinfo{$hostname}{$field} = $val ;
+}
+
+#
+#  The Distributed Assets tab defines the valid hosts and provided
+#  some of their related data (env, new/existing, platform,
+#  physical/virtual, cpus, memory, and hostname).  Extract these
+#  fields into the hostinfo hash
+sub ExtractDAData {
+
+	my $val	= q{} ;
+
+	#  The hostname is the primary key in the hostinfo hash and is
+	#  used as the key to store all the other extracted fields so it
+	#  needs to be pulled out first/separately
+	$col = $dptr->{hostname}{col} ;
+	$cell = $sheet->get_cell($row, $col) ;
+
+	#  A null cell indicates we're done which is an error here
+	unless( $cell ) {
+		print STDERR q{Cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	$hostname = $cell->value() ;
+
+	#  An empty value here is an error
+	unless( $hostname ) {
+		print q{Hostname cell in }, $row, q{,}, $col, q{ is empty terminating}, "\n" ;
+		exit(-1) ;
+	}
+
+	# print q{Hostname is: }, $hostname, "\n" ;
+
+	#  Now that we have a hostname we can start populating the
+	#  hostinfo hash
+
+	ExtractDACell(q{virtual}, $row) ;
+	ExtractDACell(q{cpus}, $row) ;
+	ExtractDACell(q{memory}, $row) ;
+	ExtractDACell(q{osver}, $row) ;
+	#  Version needs a little cleanup
+	($hostinfo{$hostname}{osver}) =~ s/rhel //gi ;
+	ExtractDACell(q{env}, $row) ;
+	#  Env needs cleanup too
+	($hostinfo{$hostname}{env}) =~ s/\s+//gi ;
+	($hostinfo{$hostname}{env}) =~ s/[0-9.]//g ;
+	($hostinfo{$hostname}{env}) =~ s/fw/ftw/g ;
+
+}
+
+# Extract the ip info for each of the elegible hosts in the hostinfo hash
+sub ExtractIPInfo {
+
+	my $rc	= q{} ;
+	my $val	= q{} ;
+
+	# Grab the IP sheet
+	$sheet	= $tabs{q{IP}} ;
+
+	$maxcol	= $sheet->{MaxCol} ;
+	$maxrow	= $sheet->{MaxRow} ;
+
+	#  This is just to simplify references later
+	$dptr = $data{q{IP}}->{headers} ;
+
+	#  The first data row should be the one immediately following hdrs
+	$row	= $dptr->{hdrrow} + 1 ;
+
+	for( $row = $dptr->{hdrrow} + 1 ; $row < $maxrow ; $row++) {
+
+		#  An null/empty first col indicates the EOD
+		$col	= 0 ;
+		$cell	= $sheet->get_cell($row, $col) ;
+
+		#  A null first cell indicates we're done
+		unless( $cell ) {
+			last ;
+		}
+
+		$val = $cell->value() ;
+
+		#  An empty first cell indicates we're done
+		unless( $val ) {
+			last ;
+		}
+
+		#  This row should have data so check it
+
+		#  Since the elegible hosts exist in the hostinfo hash
+		#  pull the hostname from this row first
+		$col = $dptr->{hostname}{col} ;
+		$cell = $sheet->get_cell($row, $col) ;
+		
+		#  A null cell here is an error
+		unless( $cell ) {
+			print q{ Hostname cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		$hostname = $cell->value() ;
+
+		#  An empty cell here is an error
+		unless( $hostname ) {
+			print q{Hostname cell in }, $row, q{,}, $col, q{ is empty terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print q{Gathering IP info for }, $hostname, "\n" ;
+		#  This isn't an elegible host if it isn't already in the
+		#  hostinfo hash so skip it
+		next unless( exists($hostinfo{$hostname}) ) ;
+
+		#  Host is elegible check to see if this is a primary interface
+
+		$col = $dptr->{ifdesc}{col} ;
+
+		$rc = ValidateCell( $row, $col, q{Application Interface}) ;
+
+		if( $rc == -1 ) {
+			print q{cell in }, $row, q{,}, $col, q{ is null terminating}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 0 ) {
+			# print q{cell in }, $row, q{,}, $col, q{ is empty skipping}, "\n" ;
+			last ;
+		}
+
+		if( $rc == 1 ) {
+			# print q{cell in }, $row, q{,}, $col, q{ isn't application interface skipping}, "\n" ;
+			next ;
+		}
+
+		if( $rc != 2 ) {
+			print q{ValidateCell returned invalid value: }, $rc, q{terminating}, "\n" ;
+			exit(-1) ;
+		}
+
+		# print "Entry is Application interface\n" ;
+
+		# This entry is an application interface so we want its data
+
+
+		ExtractIPCell(q{subnetmask}, $row) ;
+		#  Cleanup of the subnet/netmask is required
+		($hostinfo{$hostname}{subnet}, $hostinfo{$hostname}{netmask}) = split( /\//, $hostinfo{$hostname}{subnetmask}, 2) ;
+		$hostinfo{$hostname}{netmask} = $cidrmap[$hostinfo{$hostname}{netmask}]->{dec} ;
+		#  We don't need this data anymore so discard it
+		delete($hostinfo{$hostname}{subnetmask}) ;
+
+		ExtractIPCell(q{fqdn}, $row) ;
+		ExtractIPCell(q{gateway}, $row) ;
+		ExtractIPCell(q{ip}, $row) ;
+		ExtractIPCell(q{loc}, $row) ;
+		ExtractIPCell(q{vlan}, $row) ;
+
+	}
+
+}
+
+#
+#  Parse the entire spreadsheet into the workbook data structure and
+#  extract the pointers to the tabs we're interested in
+sub Init {
+
+	ParseCmdLine() ;
+	ReadSpreadsheet() ;
+
+	#  Save the hash ptr for each tab
+	foreach $sheet (@{$workbook->{Worksheet}}) {
+		$tabs{$sheet->{Name}} = $sheet ;
+	}
+	#  Keys in sheet:
+	#	BottomMargin
+	#	Cells
+	#	ColFmtNo
+	#	ColHidden
+	#	ColWidth
+	#	DefColWidth
+	#	DefRowHeight
+	#	FooterMargin
+	#	HeaderMargin
+	#	HorizontalDPI
+	#	Landscape
+	#	LeftMargin
+	#	MaxCol
+	#	MaxRow
+	#	MergedArea
+	#	MinCol
+	#	MinRow
+	#	Name
+	#	PageStart
+	#	PaperSize
+	#	RightMargin
+	#	RowHeight
+	#	RowHidden
+	#	Scale
+	#	Selection
+	#	TabColor
+	#	TopMargin
+	#	UsePage
+	#	VerticalDPI
+	#	_Book
+	#	_SheetNo
+
+}
+
+#  Determine and return the length of the longest element of a list
+sub longest {
+	my $max = -1 ;
+	for(@_) {
+		$max = length if(length > $max) ;
+	}
+	return($max) ;
+}
+
+#  Process any switches and verify a filename was provided
+sub ParseCmdLine {
+
+	#  Parse the command line
+	my $result  = GetOptions(
+		"debug|d"					=> \$debug,				# flag
+		"help|h|usage|?|version|v"	=> \&Usage				# flag
+	) ;
+
+	Usage() unless( scalar(@ARGV) == 1 && -r $ARGV[0] ) ;
+
+	$LBOMFILE = $ARGV[0] ;
+
+}
+
+#  This subroutine extracts the project specific data from the
+#  Project Details tab.  It is its own function since the key values
+#  are in the first row rather than cols
+sub ParseTabPD {
+
+	#  from Project Details tab
+	#	Application Name
+	#	Application ID Number
+	#	Project Number
+	#	Portfolio
+	#	Project Manager
+	#	Application Owner
+	#	Application Technical Contact
+	#	Application Devevelopment Team Members
+	#	Application Support Team Members
+	#	Application Support Team Name
+	#	Application Support Team Email
+	#	LBOM Number
+
+	# Grab the Project Details sheet
+	$sheet	= $tabs{q{Project Details}} ;
+
+	$maxcol	= $sheet->{MaxCol} ;
+	$maxrow	= $sheet->{MaxRow} ;
+
+	#  This is just to simplify references later
+	$dptr = $data{q{Project Details}} ;
+
+	#  Start at cell A1
+	$col = 0 ;
+	$row = 0 ;
+
+	#  Run down each row looking for the entries we're interested in
+	#  (these are the keys in %{$dptr})
+	while( $row <= $maxrow ) {
+
+		#  Extract the ptr to this cell
+		$cell = $sheet->get_cell($row, $col) ;
+
+		#  If it's populated
+		if( $cell ) {
+
+			#  Extract and clean up the value
+			#  The first RE is required because for some odd reason perl
+			#  wouldn't match the second across the newline
+			($rowname =  $cell->value()) =~ s/\n.*$//g ;
+			($rowname) =~ s/:.*$//g ;
+
+			#  Normalize whitespace
+			($rowname) =~ s/^\s+|\s+$//g ;
+			($rowname) =~ s/\s/ /g ;
+
+			#  Fix the typo in LBoM Number
+			($rowname) =~ s/LBoM/LBOM/gi ;
+
+			#  Fix the munged support email tag
+			($rowname) =~ s/Name email/Email/i ;
+
+			#  Fix the lack of capitalization of each word
+			($rowname) =~ s/\b./\u$&/g ;
+
+			#  Pull out the data for this row (have to go with col 2
+			#  because col 1 is blank and spanned by col A.  I couldn't
+			#  think of a better way to determine which column to look for
+			#  the data in
+			$cell = $sheet->get_cell($row, ($col + 2)) ;
+
+			#  Use the value if there is one otherwise an undefined string
+			$rowval = ( $cell ) ? $cell->value() : q{undefined} ;
+
+			#  Clean it up (specifically the lists of names which have
+			#  spaces around the commas for some odd reason
+			($rowval) =~ s/\s+,\s+/,/g ;
+
+			#  Is this one of the fields we're interested in?  (It'll be in
+			#  the hash if so)
+			if( exists( $dptr->{$rowname}) ) {
+				#  Yes, stuff the value in the data hash
+				$dptr->{$rowname} = $rowval ;
+			}
+		}
+
+		#  defined cell or not, next row tyvm
+		$row++ ;
+	}
+
+}
+
+#  This routine will pretty(ish) print the host info
+sub PrintHostInfo {
+
+	my $hlen	= -1 ;
+	my $klen	= -1 ;
+
+	$hlen = longest(keys %hostinfo) ;
+	foreach $hostname (sort keys %hostinfo) {
+		$klen = longest(keys %{$hostinfo{$hostname}}) ;
+		foreach $key (sort keys %{$hostinfo{$hostname}} ) {
+			printf( "%*s{%*s} => %s\n", $hlen, $hostname, $klen, $key, $hostinfo{$hostname}{$key}) ;
+		}
+	}
+
+}
+
+#  This routine will pretty(ish) print the Project Details info
+sub PrintProjectDetails {
+
+	my $klen	= -1 ;
+
+	#  This is a bad way to do this is it relies on dptr being set
+	#  correctly elsewhere
+	$klen = longest(keys %{$dptr}) ;
+	foreach $key (sort keys %{$dptr}) {
+		unless( $dptr->{$key} ) {
+			print STDERR q{ERROR: No value found for required field: }, $key, "\n" ;
+			next ;
+		}
+		printf("%*s => %s\n", -$klen, $key, $dptr->{$key}) ;
+	}
+
+}
+
+#  This routine will pretty(ish) print the Distributed Assets and IP tab info
+sub PrintTabInfo {
+
+	my $klen	= -1 ;
+
+	#  This is a bad way to do this is it relies on dptr being set
+	#  correctly elsewhere
+	$klen = longest(keys %{$dptr->{headers}}) ;
+	foreach $key (sort keys %{$dptr->{headers}}) {
+		next if( $key eq q{hdrrow} || $key eq q{hdrtag} ) ;
+		printf("%*s => %s\n", -$klen, $dptr->{headers}{$key}{name}, $dptr->{headers}{$key}{col}) ;
+		# print $dptr->{headers}{$key}{name}, q{ => }, $dptr->{headers}{$key}{col}, "\n" ;
+	}
+}
+
+#  This is where all the dirty work happens
+sub Process {
+
+	#  Parse the Project Details tab.  Currently this info isn't
+	#  necessary but will be long term so that owner/project info can
+	#  be stored with the server entry like it is for azure
+	ParseTabPD() ;
+
+	# PrintProjectDetails() ;
+
+	#  Determine the columns containing the data we're interested in.
+	#  It's done this way to make the script more robust in the face
+	#  of addition/rearraning of cols.
+	foreach $tab (keys %data) {
+
+		#  We've already got the info out of the Project Details tab
+		#  so it can be skipped
+		next if( $tab eq q{Project Details} ) ;
+
+		#  Extract the header info for this tab
+		ExtractCols($tab) ;
+
+		# PrintTabInfo() ;
+	}
+
+	#  The Distributed Assets tab is the primary indicator of which
+	#  hosts in the lbom concern us.  They must be not DR, new, and
+	#  linux (redhat specifically)
+	BuildHostInfo() ;
+
+	#  Now that we have a list of hosts that are elegible to be built
+	#  extract the IP related info
+	ExtractIPInfo() ;
+
+	# PrintHostInfo() ;
+
+	#  All the data has been gathered.  Time to create a file in a
+	#  format Sat6 can read
+
+	#  Do we have hostinfo to write?
+	if( %hostinfo ) {
+		#  Yes, write the data
+		WriteJSONFile() ;
+	}
+	else {
+		print STDERR q{No appropriate hosts found}, "\n" ;
+		exit(-1) ;
+	}
+
+}
+
+#  Call the module routines to read and initialize the xls related
+#  structures
+sub ReadSpreadsheet {
+
+	#  Allocate a new spreadsheet object
+	my $parser = Spreadsheet::ParseXLSX->new;
+
+	#  Read the lbom into it
+	# print q{Parsing spreadsheet }, scalar(localtime()), "\n" ;
+	$workbook = $parser->parse($LBOMFILE);
+	# print q{Spreadsheet parsed }, scalar(localtime()), "\n" ;
+
+	#  Keys in workbook
+	#	Color
+	#	File
+	#	Flg1904
+	#	FmtClass
+	#	Font
+	#	Format
+	#	FormatStr
+	#	PkgStr
+	#	Rich
+	#	SelectedSheet
+	#	SheetCount
+	#	Version
+	#	Worksheet
+
+}
+
+#
+#  Ye olde usage message
+#
+sub Usage {
+
+    print "$myname [--help|-h] LBOM.xlsm\n" ;
+    print "  where:\n" ;
+    print "    --help|-h  This help message\n" ;
+    print "    LBOM.xlsm  Full name of the lbom file\n" ;
+    print "               e.g. \"20213659 LBOM APP00006193 Hadoop.xlsm\"\n" ;
+    print "\n" ;
+    print "  Note:  Filename must be in quotes or have spaces escaped\n" ;
+    print "\nVersion: $VERSION\n" ;
+
+    exit(0) ;
+}
+
+#  Returns:
+#		-1  if cell is null
+#		 0  if cell is empty
+#		 1  if cell doesn't match passed string
+#		 2  if cell matches passed string
+
+#  Compare the value of the indicated cell to the passed string
+sub ValidateCell {
+
+	my $vrow	= shift ;
+	my $vcol	= shift ;
+	my $vckval	= shift ;
+
+	my $rc		= -1 ;
+	my $vval	= q{} ;
+
+	$cell = $sheet->get_cell($vrow, $vcol) ;
+
+	#  A null cell indicates we're done (this shouldn't happen
+	#  with a valid lbom)
+	return $rc unless( $cell ) ;
+
+	$rc = 0 ;
+	$vval = $cell->value() ;
+	return $rc unless( $vval ) ;
+
+	$rc = 1 ;
+	#  Indicate a non-matching entry
+	return $rc unless( $vval =~ m/$vckval/i ) ;
+
+	#  It matches!
+	$rc = 2 ;
+
+	return $rc ;
+
+}
+
+#  Generate the output in sat6 readable form
+sub WriteJSONFile {
+
+	my $fname	= q{} ;
+	my $json	= q{} ;
+	my $jsontxt	= q{} ;
+
+	$fname = $data{q{Project Details}}{q{LBOM Number}} ;
+	$fname .= q{.json} ;
+
+	open(JF, q{>}, $fname) or die "Can't open $fname: $!\n" ;
+
+	#  The below code was more or less cut and pasted from the perldoc
+	#  for the JSON module
+	$json = JSON->new->allow_nonref ;
+
+	#  The commented out calls below will generate raw json output
+	#  the uncommented ones generate human readable output
+	# $jsontxt = encode_json($data{q{Project Details}}) ;
+	$jsontxt = $json->pretty->encode( $data{q{Project Details}} ); # pretty-printing
+	# $jsontxt .= encode_json(\%hostinfo) ;
+	$jsontxt .= $json->pretty->encode( \%hostinfo ); # pretty-printing
+
+	print JF $jsontxt, "\n" ;
+
+	close(JF) ;
+
+}
+
+#  MAIN
+Init() ;
+Process() ;
+# Cleanup() ;
