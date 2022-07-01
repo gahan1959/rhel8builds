@@ -3,8 +3,8 @@
 #  parselbom.pl - Generate json file for input to sat6 build process from lbom
 #
 #  Author : Paul R. Schmidt 20210923
-#  Version: $Id: parselbom.pl,v 1.3 2021/09/23 21:27:42 i340264 Exp $
-#  Date   : $Date: 2021/09/23 21:27:42 $
+#  Version: $Id: parselbom.pl,v 1.4 2022/07/01 15:51:03 i340264 Exp $
+#  Date   : $Date: 2022/07/01 15:51:03 $
 #
 #  Copyright HCSC, All rights reserved
 #
@@ -17,7 +17,7 @@ use Getopt::Long ;
 use JSON ;
 
 my $LBOMFILE	= q{} ;
-my $VERSION		= sprintf("%d.%d", q$Revision: 1.3 $ =~ /: (\d+)\.(\d+)/) ;
+my $VERSION		= sprintf("%d.%d", q$Revision: 1.4 $ =~ /: (\d+)\.(\d+)/) ;
 
 my $cell		= q{} ;
 my $col			= 0 ;
@@ -986,7 +986,7 @@ sub Process {
 	#  Do we have hostinfo to write?
 	if( %hostinfo ) {
 		#  Yes, write the data
-		WriteJSONFile() ;
+		WriteJSONFiles() ;
 	}
 	else {
 		print STDERR q{No appropriate hosts found}, "\n" ;
@@ -1079,27 +1079,44 @@ sub ValidateCell {
 }
 
 #  Generate the output in sat6 readable form
-sub WriteJSONFile {
+sub WriteJSONFiles {
 
 	my $fname	= q{} ;
 	my $json	= q{} ;
 	my $jsontxt	= q{} ;
 
 	$fname = $data{q{Project Details}}{q{LBOM Number}} ;
-	$fname .= q{.json} ;
+	$fname .= q{-admininfo.json} ;
+
+	#  Parts of the below code was more or less cut and pasted from the
+	#  perldoc for the JSON module
+	$json = JSON->new->allow_nonref ;
+
+	#  Had to split the output into two separate files cuz json is
+	#  too stupid to handle two different definitions in one file :/
+	open(JF, q{>}, $fname) or die "Can't open $fname: $!\n" ;
+
+	#  The commented out call below will generate raw json output
+	#  the uncommented ones generate human readable output
+	# $jsontxt = encode_json($data{q{Project Details}}) ;
+	$jsontxt = $json->pretty->encode( $data{q{Project Details}} ) ; # pretty-printing
+
+	print JF $jsontxt, "\n" ;
+
+	close(JF) ;
+
+	#  Make sure any previous data are discarded
+	$jsontxt = q{} ;
+
+	$fname = $data{q{Project Details}}{q{LBOM Number}} ;
+	$fname .= q{-hostinfo.json} ;
 
 	open(JF, q{>}, $fname) or die "Can't open $fname: $!\n" ;
 
-	#  The below code was more or less cut and pasted from the perldoc
-	#  for the JSON module
-	$json = JSON->new->allow_nonref ;
-
-	#  The commented out calls below will generate raw json output
+	#  The commented out call below will generate raw json output
 	#  the uncommented ones generate human readable output
-	# $jsontxt = encode_json($data{q{Project Details}}) ;
-	$jsontxt = $json->pretty->encode( $data{q{Project Details}} ); # pretty-printing
 	# $jsontxt .= encode_json(\%hostinfo) ;
-	$jsontxt .= $json->pretty->encode( \%hostinfo ); # pretty-printing
+	$jsontxt .= $json->pretty->encode( \%hostinfo ) ; # pretty-printing
 
 	print JF $jsontxt, "\n" ;
 
